@@ -1,79 +1,66 @@
-module lif_neuron_system (
-    // System signals
+`timescale 1ns / 1ps
+
+module izh_neuron_system_lite (
     input wire clk,
     input wire reset,
     input wire enable,
     
-    // ENHANCED Input channels
-    input wire [2:0] chan_a,  
-    input wire [2:0] chan_b,  
+    // 8 Input pins
+    input wire [7:0] stimulus_in,
     
-    // Configuration interface
-    input wire load_mode,
-    input wire serial_data,
+    // 8 Output pins  
+    output wire [7:0] membrane_out,
     
-    // ENHANCED Outputs
-    output wire spike_out,
-    output wire [6:0] v_mem_out,
-    output wire params_ready
+    // 8 Inout pins
+    inout wire input_enable,
+    inout wire load_mode,
+    inout wire serial_data,
+    inout wire spike_out,
+    inout wire params_ready,
+    inout wire [2:0] debug_state
 );
 
-// Internal parameter wires
-wire [2:0] weight_a, weight_b;
-wire [1:0] leak_config;
-wire [7:0] threshold_min, threshold_max;
-wire loader_params_ready;
+    // Internal wiring
+    wire internal_input_enable = input_enable;
+    wire internal_load_mode = load_mode;
+    wire internal_serial_data = serial_data;
+    
+    wire [7:0] internal_param_a, internal_param_b, internal_param_c, internal_param_d;
+    wire loader_params_ready;
+    wire neuron_spike_out;
 
-// ENHANCED: Additional monitoring and control signals
-reg [7:0] system_cycles;
-reg [4:0] spike_count;
+    // Drive output inout pins
+    assign spike_out = neuron_spike_out;
+    assign params_ready = loader_params_ready;
+    assign debug_state = 3'b000;
 
-// Enhanced data loader instance
-lif_data_loader loader (
-    .clk(clk),
-    .reset(reset),
-    .enable(enable),
-    .serial_data_in(serial_data),
-    .load_enable(load_mode),
-    .weight_a(weight_a),
-    .weight_b(weight_b),
-    .leak_config(leak_config),
-    .threshold_min(threshold_min),
-    .threshold_max(threshold_max),
-    .params_ready(loader_params_ready)
-);
+    // Enhanced data loader
+    iz_data_loader_lite loader (
+        .clk(clk),
+        .reset(reset),
+        .enable(enable),
+        .serial_data_in(internal_serial_data),
+        .load_enable(internal_load_mode),
+        .param_a(internal_param_a),
+        .param_b(internal_param_b),
+        .param_c(internal_param_c),
+        .param_d(internal_param_d),
+        .params_ready(loader_params_ready)
+    );
 
-// Enhanced LIF neuron instance
-lif_neuron neuron (
-    .clk(clk),
-    .reset(reset),
-    .enable(enable),
-    .chan_a(chan_a),
-    .chan_b(chan_b),
-    .weight_a(weight_a),
-    .weight_b(weight_b),
-    .leak_config(leak_config),
-    .threshold_min(threshold_min),
-    .threshold_max(threshold_max),
-    .params_ready(loader_params_ready),
-    .spike_out(spike_out),
-    .v_mem_out(v_mem_out)
-);
-
-// ENHANCED: System monitoring and statistics
-always @(posedge clk) begin
-    if (reset) begin
-        system_cycles <= 8'd0;
-        spike_count <= 5'd0;
-    end else if (enable) begin
-        system_cycles <= system_cycles + 1;
-        if (spike_out) begin
-            if (spike_count < 5'd31)
-                spike_count <= spike_count + 1;
-        end
-    end
-end
-
-assign params_ready = loader_params_ready;
+    // Enhanced neuron core
+    izh_neuron_lite neuron (
+        .clk(clk),
+        .reset(reset),
+        .enable(enable & internal_input_enable),
+        .stimulus_in(stimulus_in),
+        .param_a(internal_param_a),
+        .param_b(internal_param_b),
+        .param_c(internal_param_c),
+        .param_d(internal_param_d),
+        .params_ready(loader_params_ready),
+        .spike_out(neuron_spike_out),
+        .membrane_out(membrane_out)
+    );
 
 endmodule
