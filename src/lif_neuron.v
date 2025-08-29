@@ -46,7 +46,7 @@ assign stimulus_scaled = stimulus_in << SCALE_SHIFT;
 
 // Full IZ equation: dv = 0.04v² + 5v + 140 - u + I
 assign dv_full = v_sq_term +                         // 0.04v² term
-                (v * 5) +                            // 5v term  
+                (v << 2) + v +                            // 5v term  
                 CONST_140 -                          // 140 constant
                 u +                                  // -u term
                 stimulus_scaled;                     // +I term
