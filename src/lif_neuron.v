@@ -13,64 +13,88 @@ module izh_neuron_lite (
     output reg spike_out,
     output wire [7:0] membrane_out
 );
-    
-// Improved scaling - using 2^7 = 128 for better precision vs resources
+
+// Scaling constants
 localparam SCALE_SHIFT = 7;
 localparam SCALE = 128;
-localparam V_THRESH = 30 * SCALE;        // 30mV * 128 = 3840
-localparam V_REST = -70 * SCALE;         // -70mV * 128 = -8960
-localparam CONST_140 = 140 * SCALE;      // 140 * 128 = 17920
+localparam V_THRESH = 30 * SCALE;        // 3840
+localparam V_REST   = -70 * SCALE;       // -8960
+localparam CONST_140 = 140 * SCALE;      // 17920
 
-// Increased precision state variables (14-bit for better dynamics)
-reg signed [13:0] v;  // Membrane potential  
-reg signed [13:0] u;  // Recovery variable
+// State variables
+reg signed [13:0] v;
+reg signed [13:0] u;
 
-// Improved intermediate calculations
-wire signed [19:0] v_squared_full;       // Full v² calculation
-wire signed [15:0] v_sq_term;            // Scaled 0.04v² term
-wire signed [15:0] stimulus_scaled;      // Scaled stimulus
-wire signed [19:0] dv_full;              // Full dv calculation  
-wire signed [19:0] du_full;              // Full du calculation
-wire signed [13:0] dv_limited, du_limited;
+// --------------------------------------------------
+// Pre-shifted signals (to avoid redundant shifters)
+// --------------------------------------------------
+wire signed [15:0] stimulus_scaled = stimulus_in <<< SCALE_SHIFT; 
+wire signed [13:0] u_scaled8 = u <<< 3;    // used in recovery_diff
 
-// Spike detection
+// --------------------------------------------------
+// v² term (can share multiplier with others)
+// --------------------------------------------------
+wire signed [19:0] v_squared_full = v * v;
+wire signed [15:0] v_sq_term = (v_squared_full * 5) >>> (SCALE_SHIFT + 2);
+
+// --------------------------------------------------
+// 5v as shift+add
+// --------------------------------------------------
+wire signed [13:0] v_term = (v <<< 2) + v;
+
+// --------------------------------------------------
+// dv_full computation with balanced adds
+// --------------------------------------------------
+wire signed [19:0] dv_full;
+wire signed [19:0] base_sum = v_sq_term + v_term; 
+assign dv_full = base_sum + CONST_140 + stimulus_scaled - u;
+
+// --------------------------------------------------
+// du_full computation
+// --------------------------------------------------
+wire signed [19:0] bv_scaled = (param_b * v) >>> 2;
+wire signed [19:0] recovery_diff = bv_scaled - u_scaled8;
+wire signed [19:0] du_full = (param_a * recovery_diff) >>> 6;
+
+// --------------------------------------------------
+// Saturating clamp for dv_limited
+// --------------------------------------------------
+wire signed [13:0] dv_tmp = dv_full[13:0];
+wire overflow_pos_dv = (dv_full[19:14] != 0);
+wire overflow_neg_dv = (dv_full[19:14] != {6{dv_full[13]}});
+wire signed [13:0] dv_limited = overflow_pos_dv ? 14'sd8191 :
+                                overflow_neg_dv ? -14'sd8192 :
+                                dv_tmp;
+
+// --------------------------------------------------
+// Saturating clamp for du_limited
+// --------------------------------------------------
+wire signed [13:0] du_tmp = du_full[13:0];
+wire overflow_pos_du = (du_full[19:14] != 0);
+wire overflow_neg_du = (du_full[19:14] != {6{du_full[13]}});
+wire signed [13:0] du_limited = overflow_pos_du ? 14'sd4095 :
+                                overflow_neg_du ? -14'sd4096 :
+                                du_tmp;
+
+// --------------------------------------------------
+// Pre-shift step values for update
+// --------------------------------------------------
+wire signed [13:0] dv_step = dv_limited >>> 4;
+wire signed [13:0] du_step = du_limited >>> 4;
+
+// --------------------------------------------------
+// Membrane output scaling
+// --------------------------------------------------
 wire spike_detect = (v >= V_THRESH);
-
-// Improved IZ equation with better v² approximation
-assign v_squared_full = v * v;
-// Better 0.04 approximation: 0.04 ? 5/128 (more accurate than shift-only)
-assign v_sq_term = (v_squared_full * 5) >>> (SCALE_SHIFT + 2);
-
-// Scale stimulus input  
-assign stimulus_scaled = stimulus_in << SCALE_SHIFT;
-
-// Full IZ equation: dv = 0.04v² + 5v + 140 - u + I
-assign dv_full = v_sq_term +                         // 0.04v² term
-                (v << 2) + v +                            // 5v term  
-                CONST_140 -                          // 140 constant
-                u +                                  // -u term
-                stimulus_scaled;                     // +I term
-
-// Improved recovery dynamics: du = a(bv - u) with better scaling
-wire signed [19:0] bv_scaled = (param_b * v) >>> 2;        // Scale b*v
-wire signed [19:0] recovery_diff = bv_scaled - (u << 3);   // b*v - u with scaling
-assign du_full = (param_a * recovery_diff) >>> 6;          // a * (b*v - u)
-
-// Improved clamping to prevent overflow
-assign dv_limited = (dv_full > 14'sd8191) ? 14'sd8191 : 
-                   (dv_full < -14'sd8192) ? -14'sd8192 : dv_full[13:0];
-                   
-assign du_limited = (du_full > 14'sd4095) ? 14'sd4095 : 
-                   (du_full < -14'sd4096) ? -14'sd4096 : du_full[13:0];
-
-// Fixed membrane output with proper dynamic range
 wire signed [13:0] v_normalized = v - V_REST;
 wire signed [15:0] membrane_scaled = (v_normalized * 256) >>> SCALE_SHIFT;
 assign membrane_out = spike_detect ? 8'hFF : 
                      (membrane_scaled < 0) ? 8'h00 : 
                      (membrane_scaled > 255) ? 8'hFF : membrane_scaled[7:0];
 
-// Enhanced neuron dynamics with parameter-sensitive reset
+// --------------------------------------------------
+// Sequential block
+// --------------------------------------------------
 always @(posedge clk) begin
     if (reset) begin
         v <= V_REST;
@@ -78,14 +102,13 @@ always @(posedge clk) begin
         spike_out <= 1'b0;
     end else if (enable && params_ready) begin
         if (spike_detect) begin
-            // Improved IZ reset with proper parameter scaling
-            v <= ((param_c - 8'd128) << SCALE_SHIFT) + V_REST;  // c scaled properly
-            u <= u + (param_d << 4);                            // d scaled for recovery
+            // Reset after spike
+            v <= (param_c <<< SCALE_SHIFT) + (V_REST - (128 <<< SCALE_SHIFT));
+            u <= u + (param_d <<< 4);
             spike_out <= 1'b1;
         end else begin
-            // Integrate with adaptive timestep based on membrane potential
-            v <= v + (dv_limited >>> 4);             // Smaller dt for stability
-            u <= u + (du_limited >>> 4);
+            v <= v + dv_step;
+            u <= u + du_step;
             spike_out <= 1'b0;
         end
     end else begin
