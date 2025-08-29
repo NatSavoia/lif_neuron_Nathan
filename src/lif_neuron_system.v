@@ -1,5 +1,4 @@
 `timescale 1ns / 1ps
-
 module izh_neuron_system_lite (
     input wire clk,
     input wire reset,
@@ -19,22 +18,22 @@ module izh_neuron_system_lite (
     inout wire params_ready,
     inout wire [2:0] debug_state
 );
-
+    
     // Internal wiring
     wire internal_input_enable = input_enable;
     wire internal_load_mode = load_mode;
     wire internal_serial_data = serial_data;
     
-    wire [7:0] internal_param_a, internal_param_b, internal_param_c, internal_param_d;
+    wire [5:0] internal_param_a, internal_param_b, internal_param_c, internal_param_d;
     wire loader_params_ready;
     wire neuron_spike_out;
-
+    
     // Drive output inout pins
     assign spike_out = neuron_spike_out;
     assign params_ready = loader_params_ready;
-    assign debug_state = 3'b000;
-
-    // Enhanced data loader
+    assign debug_state = 3'b000;  // Simple debug state
+    
+    // Enhanced data loader with reduced bit width
     iz_data_loader_lite loader (
         .clk(clk),
         .reset(reset),
@@ -47,8 +46,8 @@ module izh_neuron_system_lite (
         .param_d(internal_param_d),
         .params_ready(loader_params_ready)
     );
-
-    // Enhanced neuron core
+    
+    // Enhanced neuron core with reduced bit width
     izh_neuron_lite neuron (
         .clk(clk),
         .reset(reset),
@@ -62,5 +61,4 @@ module izh_neuron_system_lite (
         .spike_out(neuron_spike_out),
         .membrane_out(membrane_out)
     );
-
 endmodule
